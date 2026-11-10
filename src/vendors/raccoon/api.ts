@@ -422,7 +422,9 @@ export async function fetchEntitlement(
   const pro = office.pro_enable === true || active.pro_enable === true
   const planType = str(office.plan_type) ?? str(active.type)
   const plan = pro ? (planType !== undefined && planType !== "none" ? planType : "Pro") : "Free"
-  const until = epochOf(office.pro_expired_time) ?? epochOf(active.subscription_expired_at)
+  const until = pro
+    ? (epochOf(office.pro_expired_time) ?? epochOf(active.subscription_expired_at))
+    : undefined
   return {
     plan,
     ...(until === undefined ? {} : { until }),
