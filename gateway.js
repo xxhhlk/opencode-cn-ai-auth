@@ -1,18 +1,20 @@
 /**
  * Routing for points-funded channels.
  *
- * Two rules, in this order:
+ * Three tiers, in this order:
  *
- * 1. A channel whose daily allowance is used up goes last. Magpie knows a
- *    window is spent when its `used` reaches the routing's share, and `used`
- *    is the fullest window of the account, so this catches either a daily
- *    pool or a long-lived one that ran dry. `resting` covers what a vendor
- *    refused.
- * 2. The rest go by when their points lapse, soonest first. `soon` is a
- *    seat's windows ordered by span, longest first, so its head is the
- *    long-lived grant while a daily window sits behind it. A head that
- *    renews within `dailyHorizonDays` is that daily window — the channel has
- *    no dated grant, and it goes last, with the ones that never lapse.
+ * 1. Channels that still have today's allowance. A daily pool resets every
+ *    day, so what is left of it is lost at the reset — spend it first, the
+ *    soonest reset before the later ones.
+ * 2. Channels whose daily pool is gone but which still hold dated points.
+ *    These go by when their points lapse, soonest first.
+ * 3. Everything else: no daily pool and nothing dated (a permanent balance),
+ *    or a refusal resting it. Listed order.
+ *
+ * `soon` is a seat's windows ordered by span, longest first, so the head is
+ * the long-lived grant and a daily window sits behind it. A window that
+ * renews within `dailyHorizonDays` is that daily window; anything beyond it
+ * is a grant that lapses.
  *
  * Nothing here sends a request: it only orders seats, and magpie tries every
  * seat whatever the order says.
@@ -23,11 +25,26 @@ const DAY = 86_400_000
 /** The default horizon that separates a daily window from a dated grant. */
 const DAILY_HORIZON_DAYS = 2
 
+/** The soonest daily window that has not reset yet, or 0 when none. */
+function dailyResetOf(seat, now, horizon) {
+  const soon = Array.isArray(seat.soon) ? seat.soon : []
+  let at = 0
+  for (const t of soon) {
+    const n = Number(t)
+    if (n > now && n - now <= horizon && (at === 0 || n < at)) at = n
+  }
+  return at
+}
+
+/** The soonest grant that lapses beyond the daily horizon, or Infinity. */
 function expiryOf(seat, now, horizon) {
   const soon = Array.isArray(seat.soon) ? seat.soon : []
-  const head = soon.length > 0 ? Number(soon[0]) : 0
-  // A zero time marshals as a large negative number: no window to date.
-  return head > 0 && head - now > horizon ? head : Infinity
+  let at = Infinity
+  for (const t of soon) {
+    const n = Number(t)
+    if (n > now + horizon && n < at) at = n
+  }
+  return at
 }
 
 function spentOf(seat) {
@@ -40,18 +57,24 @@ export const strategies = {
     const days = Number(options && options.dailyHorizonDays)
     const horizon = (Number.isFinite(days) && days > 0 ? days : DAILY_HORIZON_DAYS) * DAY
 
+    const marks = seats.map((seat) => {
+      const daily = dailyResetOf(seat, now, horizon)
+      const expiry = expiryOf(seat, now, horizon)
+      const tier = daily > 0 && !spentOf(seat) ? 0 : expiry < Infinity ? 1 : 2
+      return { daily, expiry, tier }
+    })
+
     const order = seats.map((_, i) => i)
     order.sort((a, b) => {
-      const left = spentOf(seats[a]) ? 1 : 0
-      const right = spentOf(seats[b]) ? 1 : 0
-      if (left !== right) return left - right
-
-      const ea = expiryOf(seats[a], now, horizon)
-      const eb = expiryOf(seats[b], now, horizon)
-      if (ea === eb) return 0
-      if (ea === Infinity) return 1
-      if (eb === Infinity) return -1
-      return ea - eb
+      const left = marks[a]
+      const right = marks[b]
+      if (left.tier !== right.tier) return left.tier - right.tier
+      if (left.tier === 0 && left.daily !== right.daily) return left.daily - right.daily
+      if (left.tier === 1) {
+        if (left.expiry === right.expiry) return 0
+        return left.expiry - right.expiry
+      }
+      return 0
     })
     return order
   },
