@@ -23,6 +23,9 @@ import type { RaccoonBalance, RaccoonBill } from "./api.ts"
 
 const OFFSET_MS = 8 * 3600 * 1000
 
+/** A reward grant's life under the vendor's own rule: one year. */
+const ONE_YEAR_MS = 365 * 86_400_000
+
 /** The next Beijing midnight (00:00 +08:00), as epoch milliseconds. */
 export function beijingMidnight(now: number): number {
   const bj = new Date(now + OFFSET_MS)
@@ -58,6 +61,11 @@ export function dailyQuotaOf(bills: RaccoonBill[] | undefined, now: number): num
  * Daily grants are left out: the service hands them out with a one-off lapse
  * of their own, and the soonest of those would date the long-lived pool by
  * tomorrow. What is left is the pool that actually lapses in months or a year.
+ *
+ * A reward grant states no `expire_at` at all, so the vendor's own rule dates
+ * it: one year from the day it was handed out. Only when neither the bill nor
+ * its creation date is readable is the grant left undated — and an undated
+ * pool simply never orders accounts.
  */
 export function soonestGrant(
   bills: RaccoonBill[] | undefined,
@@ -69,7 +77,9 @@ export function soonestGrant(
     if (item.biz_type === "daily_grant") continue
     const held = Math.floor(Number(item.points) || 0)
     if (held <= 0) continue
-    const expire = typeof item.expire_at === "string" ? Date.parse(item.expire_at) : 0
+    const created = typeof item.created_at === "string" ? Date.parse(item.created_at) : 0
+    const stated = typeof item.expire_at === "string" ? Date.parse(item.expire_at) : 0
+    const expire = stated > 0 ? stated : created > 0 ? created + ONE_YEAR_MS : 0
     if (!(expire > now)) continue
     if (!at || expire < at) {
       at = expire
