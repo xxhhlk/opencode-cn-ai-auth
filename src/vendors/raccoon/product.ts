@@ -313,4 +313,7 @@ export const RACCOON_PATHS = Object.freeze({
   models: `${RACCOON_LLM_PREFIX}/model_catalog`,
   balance: `${RACCOON_POINTS_PREFIX}/balance`,
   bills: `${RACCOON_POINTS_PREFIX}/bills`,
+  // The desktop client's workspace read. It also hands out the day's points,
+  // which is why the check-in calls it (`checkin.ts`).
+  settingInfo: "/api/web/office/v3/setting_info",
 })

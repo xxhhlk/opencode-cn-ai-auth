@@ -111,13 +111,13 @@ export async function raccoonRead<T = Record<string, unknown>>(
   access: string,
   orgCode: string | undefined,
   path: string,
-  init: { method?: string; body?: string } = {},
+  init: { method?: string; body?: string; headers?: Record<string, string> } = {},
 ): Promise<RaccoonRead<T | undefined>> {
   let result: Awaited<ReturnType<typeof httpJson>>
   try {
     result = await httpJson(fetcher, `${RACCOON_API_BASE}${path}`, {
       method: init.method ?? "GET",
-      headers: businessHeaders(access, orgCode),
+      headers: { ...businessHeaders(access, orgCode), ...init.headers },
       ...(init.body === undefined ? {} : { body: init.body }),
       timeoutMs: RACCOON_REQUEST_TIMEOUT_MS,
     })
@@ -432,6 +432,10 @@ export interface RaccoonBill {
   points?: number
   expire_at?: string
   created_at?: string
+  /** `daily_grant`, `reward_grant`, `desktop` (a spend); absent on older rows. */
+  biz_type?: string
+  /** What the bill calls itself, as the points page shows it. */
+  event_name?: string
 }
 
 /** The income bills, oldest page first (`GET /points/v1/bills?type=income`). */
@@ -449,6 +453,37 @@ export async function fetchBills(
   if (!result.ok) return result
   const items = Array.isArray(result.data?.items) ? result.data.items : []
   return { ok: true, data: items }
+}
+
+/**
+ * The headers the desktop client sends on its workspace endpoints. The
+ * service requires them there, and they are the only difference from a
+ * business read.
+ */
+export function desktopHeaders(): Record<string, string> {
+  return {
+    "X-Client-Platform": RACCOON_CLIENT_PLATFORM,
+    "X-Client-Version": RACCOON_CLIENT_VERSION,
+  }
+}
+
+/**
+ * The workspace's opening read. Nothing in its answer is used here: the
+ * service hands the day's points out on this call, which is what the
+ * check-in is (`checkin.ts`).
+ */
+export async function openWorkspace(
+  fetcher: Fetcher,
+  access: string,
+  orgCode: string | undefined,
+): Promise<RaccoonRead<Record<string, unknown> | undefined>> {
+  return await raccoonRead(
+    fetcher,
+    access,
+    orgCode,
+    RACCOON_PATHS.settingInfo,
+    { headers: desktopHeaders() },
+  )
 }
 
 /** The account's own catalog, as answered. Throws when the sign-in lapsed. */

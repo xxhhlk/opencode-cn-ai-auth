@@ -28,6 +28,7 @@ import { defineVendor, modelContextOf, type VendorContext } from "../../core/plu
 import { patchingJsonBody } from "../../core/request.ts"
 import type { ModelRecord, StoredAuth, UsageReport } from "../../core/types.ts"
 import { chatHeaders, fetchBalance, fetchBills, fetchCatalog, refreshAccess } from "./api.ts"
+import { performCheckin } from "./checkin.ts"
 import { loginMethods } from "./login.ts"
 import { fallbackModels, modelsFrom } from "./models.ts"
 import {
@@ -122,6 +123,13 @@ export const RaccoonAuthPlugin = defineVendor(({ client, options }) => {
         ...(bills.ok ? { bills: bills.data } : {}),
         ...(typeof quota === "number" && quota > 0 ? { dailyQuota: quota } : {}),
       })
+    },
+
+    /** The day's points: the workspace read that hands them out (`checkin.ts`). */
+    async checkin(context) {
+      const auth = await context.getAuth()
+      const access = requireAccess(auth, "签到")
+      return await performCheckin(fetch, access, officeOfContext(auth, options))
     },
 
     /**
