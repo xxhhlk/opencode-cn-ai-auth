@@ -1,5 +1,9 @@
 /**
- * Raccoon's two ways in.
+ * Raccoon's ways in.
+ *
+ * **Browser, back on its own.** The desktop authorization page is opened
+ * with a loopback `redirect`; the callback lands on a page server of ours
+ * and the code is exchanged without the user copying anything.
  *
  * **WeChat, by QR code.** The desktop client's own flow ends at an
  * `office-raccoon://` callback, which a plugin running in the host's process
@@ -588,6 +592,89 @@ async function startSmsSignIn(deps: RaccoonLoginDeps): Promise<StartedFlow> {
   }
 }
 
+// ---- browser sign-in --------------------------------------------------------
+
+/**
+ * The desktop client's browser flow, which comes back on its own.
+ *
+ * The authorization page accepts a loopback callback only when the state is
+ * 64 hex characters and the redirect is `127.0.0.1:<port>/auth/callback`, so
+ * the page server is started first, raw (no random prefix), and its address
+ * is handed to the page as `redirect`. The state ties the callback to this
+ * one attempt; a code is then exchanged for the session. Nothing is written
+ * to the vendor's own client or to disk.
+ */
+async function startBrowserSignIn(deps: RaccoonLoginDeps): Promise<StartedFlow> {
+  const settlement = createSettlement<SignInResult>()
+  const state = randomHex(32)
+  let server: PageServer | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let received = false
+
+  const text = (status: number, body: string): PageResponse => ({
+    status,
+    contentType: "text/plain; charset=utf-8",
+    body,
+  })
+
+  const finish = (result: SignInResult): void => {
+    if (settlement.settled) return
+    if (timer !== undefined) clearTimeout(timer)
+    settlement.settle(result)
+    // The callback's own reply must reach the browser before the listener
+    // drops its connections.
+    const close = setTimeout(() => server?.close(), 1_000)
+    close.unref?.()
+  }
+
+  server = await PageServer.start(async (request: PageRequest) => {
+    if (request.path !== "/auth/callback" || request.method !== "GET") return notFound()
+    const states = request.query.getAll("state")
+    if (states.length !== 1 || states[0] !== state) {
+      return text(400, "回调不属于本次登录，请回到原授权页重试。")
+    }
+    if (settlement.settled || received) {
+      return text(409, "本次回调已经处理，请回到 Magpie 查看结果。")
+    }
+    if (request.query.get("error")) {
+      finish({ type: "failed", error: "商汤小浣熊授权被拒绝，请重新登录" })
+      return text(400, "登录未获授权，请回到 Magpie 重新登录。")
+    }
+    const codes = request.query.getAll("code")
+    const code = codes[0] ?? ""
+    if (codes.length !== 1 || code.length === 0 || code.length > 4096) {
+      return text(400, "回调缺少有效授权码，请回到原授权页重试。")
+    }
+    received = true
+    try {
+      const login = await exchangeAuthorizationCode(deps.fetcher, code)
+      if (settlement.settled) return text(408, "登录已超时，请回到 Magpie 重新登录。")
+      const result = signInResult(login, await learn(deps, login))
+      finish(result)
+      return text(200, "商汤小浣熊登录成功，可以关闭此页并返回 Magpie。")
+    } catch (error) {
+      finish({ type: "failed", error: errorMessage(error) })
+      return text(502, "登录未完成，请返回 Magpie 查看错误并重新登录。")
+    }
+  }, { raw: true })
+
+  const callback = `${new URL(server.url).origin}/auth/callback`
+  const url = new URL(authorizeUrl(state))
+  url.searchParams.set("desktop_callback", "loopback")
+  url.searchParams.set("redirect", callback)
+
+  timer = setTimeout(() => {
+    finish({ type: "failed", error: "商汤小浣熊登录超时，请重新登录" })
+  }, 2 * (deps.signInTimeoutMs ?? RACCOON_SIGN_IN_TIMEOUT_MS))
+  timer.unref?.()
+
+  return {
+    url: url.toString(),
+    instructions: "在浏览器完成商汤小浣熊登录并确认授权后，会自动返回此处；无需填写短信验证码或复制网页地址。",
+    done: settlement.promise,
+  }
+}
+
 // ---- sign-in fallbacks ------------------------------------------------------
 
 /**
@@ -759,6 +846,14 @@ export function fallbackMethods(deps: RaccoonLoginDeps): AuthMethod[] {
 /** The methods, as the host wants them. */
 export function loginMethods(deps: RaccoonLoginDeps): AuthMethod[] {
   const methods: AuthMethod[] = [
+    {
+      type: "oauth",
+      label: "商汤小浣熊账号（浏览器登录 / 自动返回）",
+      async authorize() {
+        const flow = await startBrowserSignIn(deps)
+        return { url: flow.url, instructions: flow.instructions, method: "auto", callback: () => flow.done }
+      },
+    },
     {
       type: "oauth",
       label: "微信扫码登录",
