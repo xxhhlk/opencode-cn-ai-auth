@@ -57,10 +57,17 @@ export const strategies = {
     const days = Number(options && options.dailyHorizonDays)
     const horizon = (Number.isFinite(days) && days > 0 ? days : DAILY_HORIZON_DAYS) * DAY
 
+    // A model the vendor serves at no cost has no window of its own: the
+    // account's own reads leave it out, so it never fills and never dates.
+    // It still answers, and it costs nothing, so it goes right after today's
+    // allowance and before anything that spends points.
+    const freeSeat = (seat) =>
+      seat.known === true && Number(seat.used) === 0 && (!Array.isArray(seat.soon) || seat.soon.length === 0)
+
     const marks = seats.map((seat) => {
       const daily = dailyResetOf(seat, now, horizon)
       const expiry = expiryOf(seat, now, horizon)
-      const tier = daily > 0 && !spentOf(seat) ? 0 : expiry < Infinity ? 1 : 2
+      const tier = daily > 0 && !spentOf(seat) ? 0 : freeSeat(seat) ? 1 : expiry < Infinity ? 2 : 3
       return { daily, expiry, tier }
     })
 
@@ -70,7 +77,7 @@ export const strategies = {
       const right = marks[b]
       if (left.tier !== right.tier) return left.tier - right.tier
       if (left.tier === 0 && left.daily !== right.daily) return left.daily - right.daily
-      if (left.tier === 1) {
+      if (left.tier === 2) {
         if (left.expiry === right.expiry) return 0
         return left.expiry - right.expiry
       }
