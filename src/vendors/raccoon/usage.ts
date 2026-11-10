@@ -54,6 +54,10 @@ export function dailyQuotaOf(bills: RaccoonBill[] | undefined, now: number): num
 /**
  * The soonest grant that still holds points and states a lapse: when the
  * earliest of what the account keeps is lost, and how much is lost then.
+ *
+ * Daily grants are left out: the service hands them out with a one-off lapse
+ * of their own, and the soonest of those would date the long-lived pool by
+ * tomorrow. What is left is the pool that actually lapses in months or a year.
  */
 export function soonestGrant(
   bills: RaccoonBill[] | undefined,
@@ -62,6 +66,7 @@ export function soonestGrant(
   let at = 0
   let points = 0
   for (const item of bills ?? []) {
+    if (item.biz_type === "daily_grant") continue
     const held = Math.floor(Number(item.points) || 0)
     if (held <= 0) continue
     const expire = typeof item.expire_at === "string" ? Date.parse(item.expire_at) : 0
