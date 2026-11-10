@@ -309,6 +309,11 @@ export const RACCOON_PATHS = Object.freeze({
   sendSms: `${RACCOON_AUTH_PREFIX}/send_sms`,
   smsLogin: `${RACCOON_AUTH_PREFIX}/login_with_sms`,
   refresh: `${RACCOON_AUTH_PREFIX}/refresh`,
+  /** The browser sign-in's authorization page, for the paste-a-code flow. */
+  authorize: "/code/authorize",
+  authCode: `${RACCOON_AUTH_PREFIX}/login_with_authorization_code`,
+  /** The account's plan; a 403 here is normal and is left unsaid. */
+  entitlement: `${RACCOON_AUTH_PREFIX}/entitlement_info`,
   userInfo: `${RACCOON_AUTH_PREFIX}/user_info`,
   models: `${RACCOON_LLM_PREFIX}/model_catalog`,
   balance: `${RACCOON_POINTS_PREFIX}/balance`,

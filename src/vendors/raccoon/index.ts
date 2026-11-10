@@ -27,7 +27,14 @@ import { markFallback, toConfigModels, toModelRecord } from "../../core/models.t
 import { defineVendor, modelContextOf, type VendorContext } from "../../core/plugin.ts"
 import { patchingJsonBody } from "../../core/request.ts"
 import type { ModelRecord, StoredAuth, UsageReport } from "../../core/types.ts"
-import { chatHeaders, fetchBalance, fetchBills, fetchCatalog, refreshAccess } from "./api.ts"
+import {
+  chatHeaders,
+  fetchBalance,
+  fetchBills,
+  fetchCatalog,
+  fetchEntitlement,
+  refreshAccess,
+} from "./api.ts"
 import { performCheckin } from "./checkin.ts"
 import { loginMethods } from "./login.ts"
 import { fallbackModels, modelsFrom } from "./models.ts"
@@ -108,9 +115,10 @@ export const RaccoonAuthPlugin = defineVendor(({ client, options }) => {
       const orgCode = officeOfContext(auth, options)
       // The bills date the reward pool and state today's daily grant; a card
       // without them is still right, only less able to route.
-      const [balance, bills] = await Promise.all([
+      const [balance, bills, entitlement] = await Promise.all([
         fetchBalance(fetch, access, orgCode),
         fetchBills(fetch, access, orgCode),
+        fetchEntitlement(fetch, access, orgCode),
       ])
       if (!balance.ok) {
         if (balance.signedOut) return { signIn: "expired", error: balance.message }
@@ -121,6 +129,7 @@ export const RaccoonAuthPlugin = defineVendor(({ client, options }) => {
       return usageReport(balance.data ?? {}, {
         ...(user === undefined ? {} : { user }),
         ...(bills.ok ? { bills: bills.data } : {}),
+        entitlement,
         ...(typeof quota === "number" && quota > 0 ? { dailyQuota: quota } : {}),
       })
     },

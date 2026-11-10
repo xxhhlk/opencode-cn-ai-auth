@@ -19,7 +19,7 @@
  */
 
 import type { UsageReport, UsageWindow } from "../../core/types.ts"
-import type { RaccoonBalance, RaccoonBill } from "./api.ts"
+import type { RaccoonBalance, RaccoonBill, RaccoonEntitlement } from "./api.ts"
 
 const OFFSET_MS = 8 * 3600 * 1000
 
@@ -97,6 +97,8 @@ export interface RaccoonUsageOptions {
   bills?: RaccoonBill[]
   /** A ceiling for the daily pool when no bill states one today. */
   dailyQuota?: number
+  /** The account's plan and when a paid one ends; unreadable on free accounts. */
+  entitlement?: RaccoonEntitlement
   now?: number
 }
 
@@ -156,7 +158,11 @@ export function balanceWindows(balance: RaccoonBalance, options: RaccoonUsageOpt
 }
 
 export function usageReport(balance: RaccoonBalance, options: RaccoonUsageOptions = {}): UsageReport {
+  const plan = options.entitlement?.plan
+  const until = options.entitlement?.until
   return {
+    ...(plan === undefined ? {} : { plan }),
+    ...(until === undefined ? {} : { until: new Date(until).toISOString() }),
     ...(options.user === undefined ? {} : { user: options.user }),
     ...(balance.available === undefined ? {} : { balance: `${balance.available} 积分` }),
     windows: balanceWindows(balance, options),

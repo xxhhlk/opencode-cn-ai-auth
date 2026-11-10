@@ -21,9 +21,14 @@
  * rather than failing once the user has typed a number.
  */
 
+import { readFileSync, statSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
+
 import { readCredential } from "../../core/credentials.ts"
 import { errorMessage } from "../../core/errors.ts"
 import type { Fetcher } from "../../core/http.ts"
+import { asObject, str } from "../../core/json.ts"
 import { notFound, type PageRequest, type PageResponse, PageServer } from "../../core/local-page.ts"
 import { vendorLogger } from "../../core/log.ts"
 import {
@@ -35,10 +40,12 @@ import {
 } from "../../core/login-page.ts"
 import { renderQrSvg } from "../../core/qr.ts"
 import type { AuthMethod, PluginClient, SignInResult } from "../../core/types.ts"
-import { createSettlement, mainlandPhone, maskPhone, sleep } from "../../core/util.ts"
+import { createSettlement, mainlandPhone, maskPhone, randomHex, sleep } from "../../core/util.ts"
 import {
+  exchangeAuthorizationCode,
   fetchUserInfo,
   generateQrCode,
+  jwtExpiresAtMs,
   loginWithSmsCode,
   pollQrLogin,
   qrContent,
@@ -48,7 +55,9 @@ import {
 } from "./api.ts"
 import {
   RACCOON_ALIYUN_CAPTCHA,
+  RACCOON_API_BASE,
   RACCOON_ID,
+  RACCOON_PATHS,
   RACCOON_PHONE_CIPHER_SECRET,
   RACCOON_QR_POLL_INTERVAL_MS,
   RACCOON_SIGN_IN_TIMEOUT_MS,
@@ -579,6 +588,174 @@ async function startSmsSignIn(deps: RaccoonLoginDeps): Promise<StartedFlow> {
   }
 }
 
+// ---- sign-in fallbacks ------------------------------------------------------
+
+/**
+ * Where the desktop client keeps its session. The two environment variables
+ * are the client's own override; otherwise it is per-OS application data, and
+ * on Windows the older `~/.office-raccoon` profile too.
+ */
+export function desktopAuthCandidates(
+  home = homedir(),
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  for (const key of ["RACCOON_BOX_AGENT_CONFIG_DIR", "BOX_AGENT_CONFIG_DIR"]) {
+    const dir = String(env[key] ?? "").trim()
+    if (dir) return [join(dir, "auth.json")]
+  }
+  const appData =
+    platform === "win32"
+      ? String(env.APPDATA ?? "").trim() || join(home, "AppData", "Roaming")
+      : platform === "darwin"
+        ? join(home, "Library", "Application Support")
+        : String(env.XDG_CONFIG_HOME ?? "").trim() || join(home, ".config")
+  const profiles = [join(appData, "office-raccoon")]
+  if (platform === "win32") profiles.unshift(join(home, ".office-raccoon"))
+  return [
+    ...profiles.map((dir) => join(dir, "agent", "config", "auth.json")),
+    join(home, ".box-agent", "config", "auth.json"),
+  ]
+}
+
+function stripBearer(value: string | undefined): string {
+  return String(value ?? "").trim().replace(/^Bearer\s+/i, "")
+}
+
+interface DesktopAuth {
+  access: string
+  refresh?: string
+  expires?: number
+}
+
+/** Reads the client's own session, without ever writing to its file. */
+function readDesktopAuth(): DesktopAuth | undefined {
+  for (const path of desktopAuthCandidates()) {
+    try {
+      const st = statSync(path)
+      if (!st.isFile() || st.size <= 0 || st.size > 256 * 1024) continue
+      const raw = asObject(JSON.parse(readFileSync(path, "utf8")))
+      const access = stripBearer(str(raw?.access_token))
+      if (!access) continue
+      const refresh = stripBearer(str(raw?.refresh_token))
+      const expires = jwtExpiresAtMs(access)
+      return {
+        access,
+        ...(refresh ? { refresh } : {}),
+        ...(expires === undefined ? {} : { expires }),
+      }
+    } catch {
+      // A missing or unreadable file is just another candidate to try.
+    }
+  }
+  return undefined
+}
+
+function authorizeUrl(state: string): string {
+  const url = new URL(RACCOON_PATHS.authorize, RACCOON_API_BASE)
+  url.searchParams.set("login_source", "desktop")
+  url.searchParams.set("appname", "办公小浣熊客户端")
+  url.searchParams.set("state", state)
+  return url.toString()
+}
+
+type Pasted = { direct?: RaccoonLogin; code?: string }
+
+/** What the user pasted: a token, a JSON session, or the callback link. */
+function parsePasted(raw: string, expectedState: string): Pasted {
+  const text = String(raw ?? "").trim()
+  if (!text) throw new Error("请输入回调链接或 Token")
+  if (text.startsWith("{")) {
+    const obj = asObject(JSON.parse(text))
+    const access = stripBearer(str(obj?.access_token) ?? str(obj?.accessToken))
+    if (!access) throw new Error("JSON 中缺少 access_token")
+    const refresh = stripBearer(str(obj?.refresh_token) ?? str(obj?.refreshToken))
+    return {
+      direct: {
+        access,
+        ...(refresh ? { refresh } : {}),
+        ...(jwtExpiresAtMs(access) === undefined ? {} : { expires: jwtExpiresAtMs(access) }),
+      },
+    }
+  }
+  if (text.split(".").length === 3 && !text.includes("://")) {
+    const access = stripBearer(text)
+    return {
+      direct: {
+        access,
+        ...(jwtExpiresAtMs(access) === undefined ? {} : { expires: jwtExpiresAtMs(access) }),
+      },
+    }
+  }
+  const url = new URL(text)
+  const code = (url.searchParams.get("code") ?? "").trim()
+  if (!code) throw new Error("回调链接中缺少授权码 code")
+  const state = (url.searchParams.get("state") ?? "").trim()
+  if (expectedState && state && state !== expectedState) {
+    throw new Error("回调链接 state 不匹配，请使用本次打开页面产生的回调链接")
+  }
+  return { code }
+}
+
+/**
+ * Two ways out when the QR sign-in cannot be used: the desktop client's
+ * session on this machine, and a token or callback link pasted by hand.
+ * Neither needs the phone cipher key, so both are always offered.
+ */
+export function fallbackMethods(deps: RaccoonLoginDeps): AuthMethod[] {
+  return [
+    {
+      type: "oauth",
+      label: "商汤小浣熊桌面端登录态（读取本机客户端）",
+      async authorize() {
+        return {
+          url: "",
+          instructions: "直接复用本机商汤小浣熊客户端的实时登录态（只读，不写入桌面端文件）。",
+          method: "auto" as const,
+          async callback() {
+            const found = readDesktopAuth()
+            if (found === undefined) {
+              return {
+                type: "failed" as const,
+                error: `未检测到本机商汤小浣熊登录态（已查找 ${desktopAuthCandidates().join("、")}）`,
+              }
+            }
+            if (found.refresh === undefined && found.expires !== undefined && found.expires <= Date.now()) {
+              return {
+                type: "failed" as const,
+                error: "商汤小浣熊桌面端登录态已过期，请先打开商汤小浣熊客户端重新登录",
+              }
+            }
+            return signInResult(found, await learn(deps, found))
+          },
+        }
+      },
+    },
+    {
+      type: "oauth",
+      label: "手动粘贴回调链接或 Token（非短信验证码）",
+      async authorize() {
+        const state = randomHex(32)
+        return {
+          url: authorizeUrl(state),
+          instructions:
+            "在浏览器完成商汤小浣熊登录后，复制地址栏或弹窗跳转的 office-raccoon://auth/callback?code=... 链接粘贴到下方（也支持直接粘贴 JWT access_token 或 JSON 登录态）：",
+          method: "code" as const,
+          async callback(input) {
+            try {
+              const pasted = parsePasted(input ?? "", state)
+              const login = pasted.direct ?? (await exchangeAuthorizationCode(deps.fetcher, pasted.code ?? ""))
+              return signInResult(login, await learn(deps, login))
+            } catch (error) {
+              return { type: "failed" as const, error: errorMessage(error) }
+            }
+          },
+        }
+      },
+    },
+  ]
+}
+
 /** The methods, as the host wants them. */
 export function loginMethods(deps: RaccoonLoginDeps): AuthMethod[] {
   const methods: AuthMethod[] = [
@@ -591,14 +768,15 @@ export function loginMethods(deps: RaccoonLoginDeps): AuthMethod[] {
       },
     },
   ]
-  if (phoneCipherSecret(deps.options) === undefined) return methods
-  methods.push({
-    type: "oauth",
-    label: "短信验证码登录",
-    async authorize() {
-      const flow = await startSmsSignIn(deps)
-      return { url: flow.url, instructions: flow.instructions, method: "auto", callback: () => flow.done }
-    },
-  })
-  return methods
+  if (phoneCipherSecret(deps.options) !== undefined) {
+    methods.push({
+      type: "oauth",
+      label: "短信验证码登录",
+      async authorize() {
+        const flow = await startSmsSignIn(deps)
+        return { url: flow.url, instructions: flow.instructions, method: "auto", callback: () => flow.done }
+      },
+    })
+  }
+  return methods.concat(fallbackMethods(deps))
 }

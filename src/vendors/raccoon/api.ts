@@ -385,6 +385,66 @@ export async function fetchUserInfo(
   }
 }
 
+// ---- plan -------------------------------------------------------------------
+
+export interface RaccoonEntitlement {
+  /** `Pro` / the active plan's type / `Free`; undefined when unreadable. */
+  plan?: string
+  /** A paid plan's end, epoch ms. */
+  until?: number
+}
+
+function epochOf(value: unknown): number | undefined {
+  if (typeof value === "string") {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+  }
+  const n = num(value)
+  if (n === undefined || n <= 0) return undefined
+  // The service states seconds in some answers and milliseconds in others.
+  return n < 1e12 ? n * 1000 : n
+}
+
+/**
+ * The account's plan. A 403 is how a free account is told it has none, so a
+ * failure here is not an error: the usage card simply says nothing about a
+ * plan (the upstream plugin's own rule).
+ */
+export async function fetchEntitlement(
+  fetcher: Fetcher,
+  access: string,
+  orgCode: string | undefined,
+): Promise<RaccoonEntitlement> {
+  const result = await raccoonRead(fetcher, access, orgCode, RACCOON_PATHS.entitlement)
+  if (!result.ok || result.data === undefined) return {}
+  const office = asObject(result.data.office) ?? asObject(result.data.code) ?? {}
+  const active = asObject(office.active_plan) ?? {}
+  const pro = office.pro_enable === true || active.pro_enable === true
+  const planType = str(office.plan_type) ?? str(active.type)
+  const plan = pro ? (planType !== undefined && planType !== "none" ? planType : "Pro") : "Free"
+  const until = epochOf(office.pro_expired_time) ?? epochOf(active.subscription_expired_at)
+  return {
+    plan,
+    ...(until === undefined ? {} : { until }),
+  }
+}
+
+/**
+ * Exchanges the browser callback's authorization code for a session. The
+ * paste-a-code sign-in uses this when the user pastes a callback link rather
+ * than a token.
+ */
+export async function exchangeAuthorizationCode(fetcher: Fetcher, code: string): Promise<RaccoonLogin> {
+  const envelope = await post(fetcher, RACCOON_PATHS.authCode, { authorization_code: code })
+  if (!envelope.ok) {
+    if (envelope.code === 200035) {
+      throw new VendorError(VENDOR, "授权码已失效，请重新发起网页登录", { code: envelope.code })
+    }
+    throw new VendorError(VENDOR, envelope.message, { code: envelope.code })
+  }
+  return loginFrom(envelope.data)
+}
+
 // ---- the reads the hooks use -------------------------------------------------
 
 export interface RaccoonBalance {
