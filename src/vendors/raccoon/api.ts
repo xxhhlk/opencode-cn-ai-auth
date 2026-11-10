@@ -423,6 +423,34 @@ export async function fetchBalance(
   }
 }
 
+/**
+ * One grant as the income bill lists it: how many points, when they lapse, and
+ * when they were handed out. The service answers no per-pool ceiling, so the
+ * bills are the only place a lapse date comes from.
+ */
+export interface RaccoonBill {
+  points?: number
+  expire_at?: string
+  created_at?: string
+}
+
+/** The income bills, oldest page first (`GET /points/v1/bills?type=income`). */
+export async function fetchBills(
+  fetcher: Fetcher,
+  access: string,
+  orgCode: string | undefined,
+): Promise<RaccoonRead<RaccoonBill[]>> {
+  const result = await raccoonRead<{ items?: RaccoonBill[] }>(
+    fetcher,
+    access,
+    orgCode,
+    `${RACCOON_PATHS.bills}?type=income&paging.limit=200&paging.offset=0`,
+  )
+  if (!result.ok) return result
+  const items = Array.isArray(result.data?.items) ? result.data.items : []
+  return { ok: true, data: items }
+}
+
 /** The account's own catalog, as answered. Throws when the sign-in lapsed. */
 export async function fetchCatalog(
   fetcher: Fetcher,

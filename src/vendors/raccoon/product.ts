@@ -128,6 +128,13 @@ export const RACCOON_PHONE_CIPHER_SECRET: CredentialSpec = {
 export const RACCOON_OFFICE_IDENTITY_OPTION = "officeIdentity"
 
 /**
+ * The daily pool's own ceiling, for a day whose grant bill cannot be read.
+ * The service never states it, so the only honest sources are today's
+ * `daily_grant` bill and this option.
+ */
+export const RACCOON_DAILY_QUOTA_OPTION = "dailyQuota"
+
+/**
  * The reasoning tiers every chat model offers, in display order.
  *
  * Raccoon has exactly two states, and they reach it through one channel:
@@ -305,4 +312,5 @@ export const RACCOON_PATHS = Object.freeze({
   userInfo: `${RACCOON_AUTH_PREFIX}/user_info`,
   models: `${RACCOON_LLM_PREFIX}/model_catalog`,
   balance: `${RACCOON_POINTS_PREFIX}/balance`,
+  bills: `${RACCOON_POINTS_PREFIX}/bills`,
 })

@@ -142,6 +142,9 @@ export interface UsageWindow {
   notModels?: string[]
   /** Using it up does not stop the account. */
   aside?: boolean
+  /** When the soonest of what the window has left is lost, and how much. */
+  runsOutAt?: string | number
+  runsOut?: number
 }
 
 export interface UsageReport {

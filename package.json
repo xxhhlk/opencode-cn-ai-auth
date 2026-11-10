@@ -4,6 +4,9 @@
   "description": "Magpie bundle and direct OpenCode entries for AStudio (讯飞), Loomy (讯飞), Raccoon (商汤小浣熊) and TRAE (字节跳动) coding subscriptions",
   "type": "module",
   "main": "./index.ts",
+  "magpie": {
+    "gateway": "./gateway.js"
+  },
   "exports": {
     ".": "./index.ts",
     "./opencode/astudio": "./opencode/astudio.ts",
@@ -13,6 +16,7 @@
   },
   "files": [
     "index.ts",
+    "gateway.js",
     "opencode",
     "src",
     "docs",

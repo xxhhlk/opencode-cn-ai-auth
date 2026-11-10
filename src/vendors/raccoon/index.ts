@@ -27,11 +27,12 @@ import { markFallback, toConfigModels, toModelRecord } from "../../core/models.t
 import { defineVendor, modelContextOf, type VendorContext } from "../../core/plugin.ts"
 import { patchingJsonBody } from "../../core/request.ts"
 import type { ModelRecord, StoredAuth, UsageReport } from "../../core/types.ts"
-import { chatHeaders, fetchBalance, fetchCatalog, refreshAccess } from "./api.ts"
+import { chatHeaders, fetchBalance, fetchBills, fetchCatalog, refreshAccess } from "./api.ts"
 import { loginMethods } from "./login.ts"
 import { fallbackModels, modelsFrom } from "./models.ts"
 import {
   RACCOON_CHAT_BASE,
+  RACCOON_DAILY_QUOTA_OPTION,
   RACCOON_ICON,
   RACCOON_ID,
   RACCOON_NAME,
@@ -103,13 +104,24 @@ export const RaccoonAuthPlugin = defineVendor(({ client, options }) => {
       const auth = await context.getAuth()
       const access = accessOf(auth)
       if (access === undefined) return { signIn: "expired", error: "账号里没有 access_token，请重新登录" }
-      const balance = await fetchBalance(fetch, access, officeOfContext(auth, options))
+      const orgCode = officeOfContext(auth, options)
+      // The bills date the reward pool and state today's daily grant; a card
+      // without them is still right, only less able to route.
+      const [balance, bills] = await Promise.all([
+        fetchBalance(fetch, access, orgCode),
+        fetchBills(fetch, access, orgCode),
+      ])
       if (!balance.ok) {
         if (balance.signedOut) return { signIn: "expired", error: balance.message }
         return { error: balance.message }
       }
       const user = accountLabel(auth)
-      return usageReport(balance.data ?? {}, user === undefined ? {} : { user })
+      const quota = options[RACCOON_DAILY_QUOTA_OPTION]
+      return usageReport(balance.data ?? {}, {
+        ...(user === undefined ? {} : { user }),
+        ...(bills.ok ? { bills: bills.data } : {}),
+        ...(typeof quota === "number" && quota > 0 ? { dailyQuota: quota } : {}),
+      })
     },
 
     /**

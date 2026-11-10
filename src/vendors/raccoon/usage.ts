@@ -1,50 +1,149 @@
 /**
- * Raccoon's points, as the host's usage card reads them.
+ * Raccoon's points, as the host's usage card and its routing read them.
  *
  * The balance endpoint answers four pools plus a total (`available_points`,
- * `reward_points`, `daily_points`, `monthly_points`, `topup_points`), and it
- * answers nothing else: the service states how much is left in each pool and
- * never how much it started with, so no pool can be turned into the share of
- * an allowance that the host routes by.
+ * `reward_points`, `daily_points`, `monthly_points`, `topup_points`). The
+ * service states how much is left in each pool and never how much it started
+ * with, so the daily pool's share is worked out against a ceiling the caller
+ * knows: the `daily_grant` bill of today, or the `dailyQuota` option.
  *
- * Every window here is therefore `aside: true` — shown on the card, and not
- * a reason to route to or away from this account. The alternative would be
- * to assume a ceiling (the daily grant is believed to be 300, which is not
- * something the service says) and let that assumption order a user's
- * accounts; the numbers are reported, the claim is not made.
+ * The host only stops an account on a window it can date, so the two windows
+ * that stop it carry a reset: the daily pool at the next Beijing midnight,
+ * the reward pool at the soonest lapse the income bills report. With no bill
+ * to date the reward window is still shown, and simply never stops the
+ * account — which is what it was before. The reward pool reports `used: 0` on
+ * purpose: its balance must order accounts, never stop them.
  *
  * `docs/vendors.md` records what the fields are read from and which of them
  * are still assumptions.
  */
 
 import type { UsageReport, UsageWindow } from "../../core/types.ts"
-import type { RaccoonBalance } from "./api.ts"
+import type { RaccoonBalance, RaccoonBill } from "./api.ts"
 
-/** A pool as the card shows it: the amount, named, and nothing inferred. */
-function pool(name: string, points: number | undefined): UsageWindow | undefined {
-  if (points === undefined) return undefined
-  return { name, used: 0, aside: true, unit: "积分", display: `${name} ${points}` }
+const OFFSET_MS = 8 * 3600 * 1000
+
+/** The next Beijing midnight (00:00 +08:00), as epoch milliseconds. */
+export function beijingMidnight(now: number): number {
+  const bj = new Date(now + OFFSET_MS)
+  const midnight = Date.UTC(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate() + 1)
+  return midnight - OFFSET_MS
 }
 
-/** The pools the service answered, in the order it lists them. */
-export function balanceWindows(balance: RaccoonBalance): UsageWindow[] {
-  const windows: UsageWindow[] = []
-  const pools = [
-    pool("每日积分", balance.daily),
-    pool("月度积分", balance.monthly),
-    pool("奖励积分", balance.reward),
-    pool("充值积分", balance.topup),
-  ]
-  for (const window of pools) {
-    if (window !== undefined) windows.push(window)
+/** The Beijing day a moment falls in, as a day number. */
+function beijingDay(t: number): number {
+  return Math.floor((t + OFFSET_MS) / 86_400_000)
+}
+
+/**
+ * Today's daily grant, in points — the daily pool's ceiling, which the
+ * balance endpoint itself never states.
+ */
+export function dailyQuotaOf(bills: RaccoonBill[] | undefined, now: number): number | undefined {
+  const today = beijingDay(now)
+  for (const item of bills ?? []) {
+    if (item.biz_type !== "daily_grant") continue
+    const created = typeof item.created_at === "string" ? Date.parse(item.created_at) : 0
+    if (!(created > 0) || beijingDay(created) !== today) continue
+    const points = Math.floor(Number(item.points) || 0)
+    if (points > 0) return points
   }
+  return undefined
+}
+
+/**
+ * The soonest grant that still holds points and states a lapse: when the
+ * earliest of what the account keeps is lost, and how much is lost then.
+ */
+export function soonestGrant(
+  bills: RaccoonBill[] | undefined,
+  now: number,
+): { at: number; points: number } | undefined {
+  let at = 0
+  let points = 0
+  for (const item of bills ?? []) {
+    const held = Math.floor(Number(item.points) || 0)
+    if (held <= 0) continue
+    const expire = typeof item.expire_at === "string" ? Date.parse(item.expire_at) : 0
+    if (!(expire > now)) continue
+    if (!at || expire < at) {
+      at = expire
+      points = held
+    } else if (expire === at) {
+      points += held
+    }
+  }
+  return at ? { at, points } : undefined
+}
+
+export interface RaccoonUsageOptions {
+  user?: string
+  /** Income bills: the only place a lapse date and today's grant come from. */
+  bills?: RaccoonBill[]
+  /** A ceiling for the daily pool when no bill states one today. */
+  dailyQuota?: number
+  now?: number
+}
+
+/** The pools the service answered, with the two the host can route by dated. */
+export function balanceWindows(balance: RaccoonBalance, options: RaccoonUsageOptions = {}): UsageWindow[] {
+  const now = options.now ?? Date.now()
+  const windows: UsageWindow[] = []
+
+  const daily = balance.daily
+  if (daily !== undefined) {
+    const quota = dailyQuotaOf(options.bills, now) ?? options.dailyQuota
+    const dated = quota !== undefined && quota > 0
+    // A ceiling lets the share be a real percentage; without one the pool can
+    // still say whether it is empty, which is all the routing needs.
+    const used = dated
+      ? Math.min(100, Math.max(0, (100 * (quota - daily)) / quota))
+      : daily > 0
+        ? 0
+        : 100
+    windows.push({
+      name: "每日积分",
+      used,
+      resetsAt: beijingMidnight(now),
+      span: 86_400,
+      ...(dated ? { amount: Math.max(0, quota - daily), limit: quota } : {}),
+      unit: "积分",
+      display: dated ? `每日 ${daily} / ${quota}` : `每日剩余 ${daily}`,
+    })
+  }
+
+  // The reward pool is the long-lived one: registration grants, a year.
+  const reward = balance.reward
+  if (reward !== undefined) {
+    const grant = soonestGrant(options.bills, now)
+    windows.push({
+      name: "奖励积分",
+      used: 0,
+      ...(grant === undefined
+        ? {}
+        : {
+            resetsAt: grant.at,
+            runsOutAt: grant.at,
+            runsOut: Math.min(reward, grant.points),
+            span: Math.max(3600, Math.floor((grant.at - now) / 1000)),
+          }),
+      unit: "积分",
+      display: `奖励积分 ${reward}`,
+    })
+  }
+
+  // Top-ups never lapse, so this one is only shown.
+  if (balance.topup !== undefined) {
+    windows.push({ name: "充值积分", used: 0, aside: true, unit: "积分", display: `充值积分 ${balance.topup}` })
+  }
+
   return windows
 }
 
-export function usageReport(balance: RaccoonBalance, options: { user?: string } = {}): UsageReport {
+export function usageReport(balance: RaccoonBalance, options: RaccoonUsageOptions = {}): UsageReport {
   return {
     ...(options.user === undefined ? {} : { user: options.user }),
     ...(balance.available === undefined ? {} : { balance: `${balance.available} 积分` }),
-    windows: balanceWindows(balance),
+    windows: balanceWindows(balance, options),
   }
 }
