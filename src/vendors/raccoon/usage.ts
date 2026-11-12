@@ -130,9 +130,13 @@ export function balanceWindows(balance: RaccoonBalance, options: RaccoonUsageOpt
   }
 
   // The reward pool is the long-lived one: registration grants, a year.
+  // Its lapse date describes this pool alone. Once it is empty, keeping the
+  // date would tell the routing strategy the account still has dated points
+  // to spend before the permanent pools, when only top-ups or the daily
+  // grant are left. The dated grants in the bills are history, not balance.
   const reward = balance.reward
   if (reward !== undefined) {
-    const grant = soonestGrant(options.bills, now)
+    const grant = reward > 0 ? soonestGrant(options.bills, now) : undefined
     windows.push({
       name: "奖励积分",
       used: 0,
