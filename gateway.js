@@ -76,12 +76,9 @@ function spentOf(seat) {
   return seat.resting === true || (seat.known === true && Number(seat.used) >= 100)
 }
 
+/** Use the parsed list: a zero or invalid time is not a dated window. */
 function freeSeat(seat) {
-  return (
-    seat.known === true &&
-    Number(seat.used) === 0 &&
-    (!Array.isArray(seat.soon) || seat.soon.length === 0)
-  )
+  return seat.known === true && Number(seat.used) === 0 && soonOf(seat).length === 0
 }
 
 function keyOf(seat, i) {

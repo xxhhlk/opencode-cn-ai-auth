@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `daily-expiry` 的 `freeSeat()` 改用 `soonOf(seat).length === 0` 判断是否带日期窗口。
+  Magpie 对未设置的 `time.Time` 会序列化成 `0001-01-01T00:00:00Z`，`soonOf()` 会把它
+  过滤掉，但 `freeSeat()` 原先看的是原始数组长度，于是这类座位被误判成「有窗口」，
+  掉到 tier 3 兜底而不是 tier 1 免费座位。实测影响面仅 marvis 一个座位，其余 19 个不变。
+- 新增 `tests/gateway.test.ts` 覆盖零值时间、无日期、真实日期窗口、日窗口和已耗尽的零值时间座位。
+
 ### Added
 
 - **Loomy 的宠物每日打工奖励（0～1000 分/天）随签到领取**。`GET /pet-work` 读当日
