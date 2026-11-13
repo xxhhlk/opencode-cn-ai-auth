@@ -3,9 +3,13 @@ import type { AuthMethod, OAuthMethod } from "../src/core/types.ts"
 import { loginMethods, signInResult } from "../src/vendors/raccoon/login.ts"
 import { cannedFetch, fakeClient, jsonOk, tick } from "./helpers.ts"
 
-function oauthMethod(methods: readonly AuthMethod[], index: number): OAuthMethod {
-  const method = methods[index]
-  if (method === undefined || method.type !== "oauth") throw new Error(`方法 ${index} 不是 oauth`)
+/**
+ * 短信那条要 phoneCipherSecret 才装得上，按标签取而不是按下标：
+ * 登录方式的顺序会随厂商新增入口变化，下标会把用例指到别的页面上。
+ */
+function smsMethod(methods: readonly AuthMethod[]): OAuthMethod {
+  const method = methods.find((item) => item.type === "oauth" && item.label.includes("短信"))
+  if (method === undefined || method.type !== "oauth") throw new Error("没有短信验证码登录方式")
   return method
 }
 
@@ -26,7 +30,7 @@ describe("Raccoon 登录生命周期", () => {
       fetcher: cannedFetch([]),
       signInTimeoutMs: 20,
     })
-    const started = await oauthMethod(methods, 1).authorize()
+    const started = await smsMethod(methods).authorize()
     const page = await fetch(started.url ?? "")
     const html = await page.text()
     expect(html).toContain('sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"')
@@ -68,7 +72,7 @@ describe("Raccoon 登录生命周期", () => {
       fetcher,
       signInTimeoutMs: 1_000,
     })
-    const started = await oauthMethod(methods, 1).authorize()
+    const started = await smsMethod(methods).authorize()
     if (started.url === undefined) throw new Error("短信登录必须返回本地页 URL")
     const endpoint = (path: string) => `${started.url}${path}`
 

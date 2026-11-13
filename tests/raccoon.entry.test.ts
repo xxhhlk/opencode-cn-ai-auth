@@ -46,7 +46,7 @@ describe("插件入口", () => {
     expect(typeof loomy.auth.checkin).toBe("function")
     expect(raccoon.auth.provider).toBe("raccoon")
     expect(providerOf(raccoon).id).toBe("raccoon")
-    expect(raccoon.auth.checkin).toBeUndefined()
+    expect(typeof raccoon.auth.checkin).toBe("function")
     expect(typeof raccoon.auth.refresh).toBe("function")
     expect(loomy.auth.refresh).toBeUndefined()
     // Trae 两项写钩子都有：签到是这次接入的目的，续期是轮转型 token 必需的。
@@ -140,7 +140,9 @@ describe("插件入口", () => {
     expect(hooks).toHaveLength(3)
     // loomy: 两个 oauth 方式（微信 + 短信）+ env + key。
     expect(integrationUpdates.filter((update) => update.integrationID === "loomy")).toHaveLength(4)
-    expect(integrationUpdates.filter((update) => update.integrationID === "raccoon")).toHaveLength(3)
+    // raccoon: 四个 oauth 方式（浏览器 / 微信扫码 / 本机桌面端 / 粘贴回调）+ env + key。
+    // 短信那条要 phoneCipherSecret，这里没有，所以是四条而不是五条。
+    expect(integrationUpdates.filter((update) => update.integrationID === "raccoon")).toHaveLength(6)
     const loomyOAuth = integrationUpdates.find(
       (update) => update.integrationID === "loomy" && update.method.type === "oauth",
     )

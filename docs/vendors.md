@@ -441,14 +441,20 @@ loader 的 fetch 把 JSON 形态（非 event-stream）的 200+100002 重建为
 
 | 窗口 | 来源 | 宿主语义 |
 |---|---|---|
-| 每日积分 / 月度积分 / 奖励积分 / 充值积分 | `GET /points/v1/balance` 的 `daily_points` / `monthly_points` / `reward_points` / `topup_points` | 全部 `aside: true`：只展示，不参与路由 |
+| 每日积分 | `daily_points` + 当天的 `daily_grant` 账单（或 `dailyQuota` 选项） | `used` 是当日占比，`resetsAt` 是下一个北京 0 点、`span = 86400`：用光的账号被宿主停掉 |
+| 奖励积分 | `reward_points` + 入账账单里最早的一次到期 | `used` 恒为 0，只靠 `resetsAt` / `runsOutAt` 排序，永不停号；池子空了就不带日期 |
+| 充值积分 | `topup_points` | `aside: true`：只展示 |
 | 可用积分 | `available_points` | 卡片 `balance` 一行 |
 
-- 所有窗口都不计算百分比：服务只说"还剩多少"，**不说上限**。把猜来的上限写进
-  `used` 会让宿主按错误的用量排序账号，因此宁可不参与路由。
-- **每日 300 分是服务端自动发放、没有端点**，所以不实现 `auth.checkin`
-  （不伪造签到能力）。
-- 一次性登录奖励 3000 分同样没有对应钩子，不做。
+- 服务只说"还剩多少"，**不说上限**：每日池的占比只拿调用方知道的天花板算——今天
+  的 `daily_grant` 账单，或 `dailyQuota` 选项；两个都拿不到就退化成「有/没有」
+  （`used` 为 0 或 100），不编百分比。
+- **月度池不展示**：服务从来不发（`monthly_points` 恒 0）。
+- 奖励池的到期按厂商自己的规则：账单给了 `expire_at` 就用它，没给就是发放日
+  + 一年；两者都没有就不带日期，只展示、不参与排序。
+- **签到就是工作台那次读**（`office/v3/setting_info`）：服务没有签到端点，当日积分
+  由客户端打开工作台时发放，所以 `auth.checkin` 在读取前后各拉一次入账账单，
+  差额才是这次签到拿到的分（一次性登录奖励 3000 分不做）。
 
 ### 图标
 

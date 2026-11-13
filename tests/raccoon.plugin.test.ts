@@ -2,7 +2,8 @@
  * 保护 vendors/raccoon/index.ts 的装配：config 声明 provider、loader 装
  * Bearer + 组织头并包一层 thinking 补丁、usage 只读余额（401 就是
  * signIn:"expired"）、refresh 用账号里的 refresh_token 且不轮换时保留旧的、
- * 没有 checkin 钩子。要碰网络的路径都把 globalThis.fetch 换成 cannedFetch，测完还原。
+ * checkin 领当日积分（工作台那次读顺手发）。要碰网络的路径都把
+ * globalThis.fetch 换成 cannedFetch，测完还原。
  */
 
 import { describe, expect, test } from "bun:test"
@@ -60,14 +61,21 @@ function jwt(expSeconds: number): string {
 }
 
 describe("RaccoonAuthPlugin 的钩子形状", () => {
-  test("provider、refreshLead 与没有 checkin", async () => {
+  test("provider、refreshLead、checkin 与四种登录方式", async () => {
     const hooks = await raccoonHooks()
     expect(hooks.auth.provider).toBe("raccoon")
     expect(providerOf(hooks).id).toBe("raccoon")
     expect(hooks.auth.refreshLead).toBe(RACCOON_REFRESH_LEAD_MS)
     expect(hooks.auth.refreshLead).toBe(300_000)
-    expect(hooks.auth.checkin).toBeUndefined()
-    expect(hooks.auth.methods.map((method) => method.label)).toStrictEqual(["微信扫码登录"])
+    // 当日积分靠工作台那次读发放，所以宿主可以点签到。
+    expect(typeof hooks.auth.checkin).toBe("function")
+    // 没给 phoneCipherSecret 时没有短信那条；剩下四条都零配置可用。
+    expect(hooks.auth.methods.map((method) => method.label)).toStrictEqual([
+      "商汤小浣熊账号（浏览器登录 / 自动返回）",
+      "微信扫码登录",
+      "商汤小浣熊桌面端登录态（读取本机客户端）",
+      "手动粘贴回调链接或 Token（非短信验证码）",
+    ])
   })
 
   test("icon 是厂商自己托管的 https 图片，且与 Loomy 不同", async () => {
@@ -215,13 +223,19 @@ describe("usage", () => {
       response,
       async () => await requireUsage(hooks)(async () => auth, PROVIDER),
     )
-    expect(report).toStrictEqual({
-      user: "138****5678",
-      balance: "1234 积分",
-      windows: [
-        { name: "每日积分", used: 0, aside: true, unit: "积分", display: "每日积分 100" },
-        { name: "奖励积分", used: 0, aside: true, unit: "积分", display: "奖励积分 30" },
-      ],
+    const windows = report.windows ?? []
+    expect(report.user).toBe("138****5678")
+    expect(report.balance).toBe("1234 积分")
+    expect(windows.map((window) => window.name)).toStrictEqual(["每日积分", "奖励积分"])
+    // 卡片只读余额，没有账单可以定天花板，也就没有占比；到期时间照给，宿主要它排序。
+    expect(typeof at(windows, 0).resetsAt).toBe("number")
+    expect(at(windows, 0)).toMatchObject({ used: 0, span: 86_400, unit: "积分", display: "每日剩余 100" })
+    // 奖励池同上：读不到账单就只是展示，不声称到期。
+    expect(at(windows, 1)).toStrictEqual({
+      name: "奖励积分",
+      used: 0,
+      unit: "积分",
+      display: "奖励积分 30",
     })
     const call = at(response.calls, 0)
     expect(call.url).toBe("https://xiaohuanxiong.com/api/web/points/v1/balance")
