@@ -113,11 +113,7 @@ export function balanceWindows(balance: RaccoonBalance, options: RaccoonUsageOpt
     const dated = quota !== undefined && quota > 0
     // A ceiling lets the share be a real percentage; without one the pool can
     // still say whether it is empty, which is all the routing needs.
-    const used = dated
-      ? Math.min(100, Math.max(0, (100 * (quota - daily)) / quota))
-      : daily > 0
-        ? 0
-        : 100
+    const used = dated ? Math.min(100, Math.max(0, (100 * (quota - daily)) / quota)) : daily > 0 ? 0 : 100
     windows.push({
       name: "每日积分",
       used,
@@ -155,7 +151,13 @@ export function balanceWindows(balance: RaccoonBalance, options: RaccoonUsageOpt
 
   // Top-ups never lapse, so this one is only shown.
   if (balance.topup !== undefined) {
-    windows.push({ name: "充值积分", used: 0, aside: true, unit: "积分", display: `充值积分 ${balance.topup}` })
+    windows.push({
+      name: "充值积分",
+      used: 0,
+      aside: true,
+      unit: "积分",
+      display: `充值积分 ${balance.topup}`,
+    })
   }
 
   return windows

@@ -539,13 +539,7 @@ export async function openWorkspace(
   access: string,
   orgCode: string | undefined,
 ): Promise<RaccoonRead<Record<string, unknown> | undefined>> {
-  return await raccoonRead(
-    fetcher,
-    access,
-    orgCode,
-    RACCOON_PATHS.settingInfo,
-    { headers: desktopHeaders() },
-  )
+  return await raccoonRead(fetcher, access, orgCode, RACCOON_PATHS.settingInfo, { headers: desktopHeaders() })
 }
 
 /** The account's own catalog, as answered. Throws when the sign-in lapsed. */
