@@ -1,0 +1,98 @@
+# 每天把上游的提交合并进来，同时保留本仓库的自定义提交。
+#
+# 用 merge 不用 rebase：自定义提交在这里有 14 个，rebase 每次都要重放一遍、
+# 冲突解 14 次；merge 一次解完就固定下来。
+#
+# GITHUB_TOKEN 推的提交不会再触发 ci.yml（GitHub 防递归），所以门禁必须在这里
+# 自己跑一遍，绿了才推，否则坏合并会静默落到 master。
+#
+# 三种异常都开 issue 而不是硬推：
+#   - 合并冲突：上游和我们改了同几行
+#   - 无关历史：上游 force push 重写过历史（merge-base 不存在），不能硬合
+#   - 门禁失败：合上了但测试/检查不过
+
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # UTC 03:17 = 北京 11:17
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/XcodeFish/opencode-cn-ai-auth.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/XcodeFish/opencode-cn-ai-auth.git
+          git fetch upstream master
+
+          if ! git merge-base HEAD FETCH_HEAD >/dev/null 2>&1; then
+            echo "state=unrelated" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge --no-edit FETCH_HEAD; then
+            echo "state=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
+            git merge --abort
+            echo "state=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.merge.outputs.state == 'merged'
+
+      - name: Gate
+        id: gate
+        if: steps.merge.outputs.state == 'merged'
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          HOME="$(mktemp -d)" bun run verify
+
+      - name: Push
+        if: steps.merge.outputs.state == 'merged'
+        run: git push origin HEAD:master
+
+      - name: Report
+        if: steps.merge.outputs.state != 'merged' || failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          state="${{ steps.merge.outputs.state }}"
+          case "$state" in
+            conflict)
+              title="sync: 上游合并冲突 $(date -u +%F)"
+              body="$(printf '上游有新提交，自动合并冲突，需人工解决。\n\n冲突文件：\n\n```\n%s\n```\n\n本地解完推 master 即可，下次自动同步会继续。' "$(cat /tmp/conflicts.txt 2>/dev/null || echo '(未取到)')")"
+              ;;
+            unrelated)
+              title="sync: 上游重写过历史 $(date -u +%F)"
+              body="$(printf '`git merge-base` 返回空 —— 上游 force push 重写了历史，与本仓库已无共同祖先。\n\n**不要**直接 `--allow-unrelated-histories` 硬合，会把两边历史搅在一起。\n\n处理方式：把本仓库的自定义提交导出成 patch，重新基于上游建分支后再应用：\n\n```\ngit log --oneline upstream/master..HEAD   # 先看有哪些自定义提交\ngit format-patch upstream/master..HEAD -o /tmp/ours\ngit reset --hard upstream/master\ngit am /tmp/ours/*.patch   # 逐个解冲突\n```')"
+              ;;
+            *)
+              title="sync: 门禁没过 $(date -u +%F)"
+              body="$(printf '上游已合并进本地分支，但 `bun run verify` 没过，**没有推送**。\n\n看这次 workflow 的 Gate 步骤日志定位问题；修好后手动 dispatch 一次即可。')"
+              ;;
+          esac
+          gh issue create --title "$title" --body "$body"
