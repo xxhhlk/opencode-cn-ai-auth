@@ -627,50 +627,57 @@ async function startBrowserSignIn(deps: RaccoonLoginDeps): Promise<StartedFlow> 
     close.unref?.()
   }
 
-  server = await PageServer.start(async (request: PageRequest) => {
-    if (request.path !== "/auth/callback" || request.method !== "GET") return notFound()
-    const states = request.query.getAll("state")
-    if (states.length !== 1 || states[0] !== state) {
-      return text(400, "回调不属于本次登录，请回到原授权页重试。")
-    }
-    if (settlement.settled || received) {
-      return text(409, "本次回调已经处理，请回到 Magpie 查看结果。")
-    }
-    if (request.query.get("error")) {
-      finish({ type: "failed", error: "商汤小浣熊授权被拒绝，请重新登录" })
-      return text(400, "登录未获授权，请回到 Magpie 重新登录。")
-    }
-    const codes = request.query.getAll("code")
-    const code = codes[0] ?? ""
-    if (codes.length !== 1 || code.length === 0 || code.length > 4096) {
-      return text(400, "回调缺少有效授权码，请回到原授权页重试。")
-    }
-    received = true
-    try {
-      const login = await exchangeAuthorizationCode(deps.fetcher, code)
-      if (settlement.settled) return text(408, "登录已超时，请回到 Magpie 重新登录。")
-      const result = signInResult(login, await learn(deps, login))
-      finish(result)
-      return text(200, "商汤小浣熊登录成功，可以关闭此页并返回 Magpie。")
-    } catch (error) {
-      finish({ type: "failed", error: errorMessage(error) })
-      return text(502, "登录未完成，请返回 Magpie 查看错误并重新登录。")
-    }
-  }, { raw: true })
+  server = await PageServer.start(
+    async (request: PageRequest) => {
+      if (request.path !== "/auth/callback" || request.method !== "GET") return notFound()
+      const states = request.query.getAll("state")
+      if (states.length !== 1 || states[0] !== state) {
+        return text(400, "回调不属于本次登录，请回到原授权页重试。")
+      }
+      if (settlement.settled || received) {
+        return text(409, "本次回调已经处理，请回到 Magpie 查看结果。")
+      }
+      if (request.query.get("error")) {
+        finish({ type: "failed", error: "商汤小浣熊授权被拒绝，请重新登录" })
+        return text(400, "登录未获授权，请回到 Magpie 重新登录。")
+      }
+      const codes = request.query.getAll("code")
+      const code = codes[0] ?? ""
+      if (codes.length !== 1 || code.length === 0 || code.length > 4096) {
+        return text(400, "回调缺少有效授权码，请回到原授权页重试。")
+      }
+      received = true
+      try {
+        const login = await exchangeAuthorizationCode(deps.fetcher, code)
+        if (settlement.settled) return text(408, "登录已超时，请回到 Magpie 重新登录。")
+        const result = signInResult(login, await learn(deps, login))
+        finish(result)
+        return text(200, "商汤小浣熊登录成功，可以关闭此页并返回 Magpie。")
+      } catch (error) {
+        finish({ type: "failed", error: errorMessage(error) })
+        return text(502, "登录未完成，请返回 Magpie 查看错误并重新登录。")
+      }
+    },
+    { raw: true },
+  )
 
   const callback = `${new URL(server.url).origin}/auth/callback`
   const url = new URL(authorizeUrl(state))
   url.searchParams.set("desktop_callback", "loopback")
   url.searchParams.set("redirect", callback)
 
-  timer = setTimeout(() => {
-    finish({ type: "failed", error: "商汤小浣熊登录超时，请重新登录" })
-  }, 2 * (deps.signInTimeoutMs ?? RACCOON_SIGN_IN_TIMEOUT_MS))
+  timer = setTimeout(
+    () => {
+      finish({ type: "failed", error: "商汤小浣熊登录超时，请重新登录" })
+    },
+    2 * (deps.signInTimeoutMs ?? RACCOON_SIGN_IN_TIMEOUT_MS),
+  )
   timer.unref?.()
 
   return {
     url: url.toString(),
-    instructions: "在浏览器完成商汤小浣熊登录并确认授权后，会自动返回此处；无需填写短信验证码或复制网页地址。",
+    instructions:
+      "在浏览器完成商汤小浣熊登录并确认授权后，会自动返回此处；无需填写短信验证码或复制网页地址。",
     done: settlement.promise,
   }
 }
@@ -706,7 +713,9 @@ export function desktopAuthCandidates(
 }
 
 function stripBearer(value: string | undefined): string {
-  return String(value ?? "").trim().replace(/^Bearer\s+/i, "")
+  return String(value ?? "")
+    .trim()
+    .replace(/^Bearer\s+/i, "")
 }
 
 interface DesktopAuth {
@@ -757,20 +766,22 @@ function parsePasted(raw: string, expectedState: string): Pasted {
     const access = stripBearer(str(obj?.access_token) ?? str(obj?.accessToken))
     if (!access) throw new Error("JSON 中缺少 access_token")
     const refresh = stripBearer(str(obj?.refresh_token) ?? str(obj?.refreshToken))
+    const expires = jwtExpiresAtMs(access)
     return {
       direct: {
         access,
         ...(refresh ? { refresh } : {}),
-        ...(jwtExpiresAtMs(access) === undefined ? {} : { expires: jwtExpiresAtMs(access) }),
+        ...(expires === undefined ? {} : { expires }),
       },
     }
   }
   if (text.split(".").length === 3 && !text.includes("://")) {
     const access = stripBearer(text)
+    const expires = jwtExpiresAtMs(access)
     return {
       direct: {
         access,
-        ...(jwtExpiresAtMs(access) === undefined ? {} : { expires: jwtExpiresAtMs(access) }),
+        ...(expires === undefined ? {} : { expires }),
       },
     }
   }
@@ -831,7 +842,8 @@ export function fallbackMethods(deps: RaccoonLoginDeps): AuthMethod[] {
           async callback(input) {
             try {
               const pasted = parsePasted(input ?? "", state)
-              const login = pasted.direct ?? (await exchangeAuthorizationCode(deps.fetcher, pasted.code ?? ""))
+              const login =
+                pasted.direct ?? (await exchangeAuthorizationCode(deps.fetcher, pasted.code ?? ""))
               return signInResult(login, await learn(deps, login))
             } catch (error) {
               return { type: "failed" as const, error: errorMessage(error) }

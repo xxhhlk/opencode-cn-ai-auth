@@ -7,20 +7,31 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { strategies } from "../gateway.js"
+import { type Seat, type Strategy, strategies } from "../gateway.js"
 
 const DAY = 86_400_000
 
-function seat(over = {}) {
+function seat(over: Partial<Seat> = {}): Seat {
   return { key: "x", known: true, used: 0, soon: [], ...over }
 }
 
 /** Each scenario needs its own pool: the strategy keeps frozen tier-2 state per pool. */
 let poolSeq = 0
 
-function orderFor(specs) {
+function missing(): never {
+  throw new Error("gateway.js is missing the daily-expiry strategy")
+}
+
+const dailyExpiry: Strategy = strategies["daily-expiry"] ?? missing()
+
+function orderFor(specs: Array<Partial<Seat>>) {
   const seats = specs.map((s, i) => seat({ key: `s${i}`, ...s }))
-  return { seats, order: strategies["daily-expiry"](`test-pool-${++poolSeq}`, seats, {}) }
+  return { seats, order: dailyExpiry(poolName(), seats, {}) }
+}
+
+function poolName(): string {
+  poolSeq += 1
+  return `test-pool-${poolSeq}`
 }
 
 const far = () => new Date(Date.now() + 10 * DAY).toISOString()
@@ -53,10 +64,7 @@ describe("daily-expiry / freeSeat", () => {
   })
 
   test("a spent zero-time seat is not a free seat", () => {
-    const { order } = orderFor([
-      { soon: ["0001-01-01T00:00:00Z"], used: 100, key: "spent" },
-      { key: "free" },
-    ])
+    const { order } = orderFor([{ soon: ["0001-01-01T00:00:00Z"], used: 100, key: "spent" }, { key: "free" }])
     expect(order[0]).toBe(1)
   })
 })
