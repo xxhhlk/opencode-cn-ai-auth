@@ -95,4 +95,28 @@ jobs:
               body="$(printf '上游已合并进本地分支，但 `bun run verify` 没过，**没有推送**。\n\n看这次 workflow 的 Gate 步骤日志定位问题；修好后手动 dispatch 一次即可。')"
               ;;
           esac
-          gh issue create --title "$title" --body "$body"
+
+          # REST 直接建 issue：gh issue create 在有 install token 的 fork 上会走 GraphQL，
+          # 报 `Resource not accessible by integration (createIssue)`，而同一个 token 的
+          # contents: write 明明生效。通知失败不该盖住「同步没做成」这个事实，所以下面
+          # 无论通知成没成，非 merged 的跑都要红。
+          printf '%s\n\n%s\n' "$title" "$body" > /tmp/report.md
+          if gh api -X POST "repos/$GITHUB_REPOSITORY/issues" \
+               -f "title=$title" -F "body=@/tmp/report.md" > /dev/null; then
+            echo "opened issue: $title"
+          else
+            echo "::error::建 issue 失败，摘要写进 run summary"
+            {
+              echo "## $title"
+              echo
+              cat /tmp/report.md
+              echo
+              echo '**这个 token 实际拿到的权限**'
+              echo '```'
+              curl -sS -D - -o /dev/null -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY" | grep -i '^x-' || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          [ "$state" = "merged" ] || exit 1
