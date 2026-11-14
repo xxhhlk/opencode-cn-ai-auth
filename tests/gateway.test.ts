@@ -36,6 +36,8 @@ function poolName(): string {
 
 const far = () => new Date(Date.now() + 10 * DAY).toISOString()
 const near = () => new Date(Date.now() + 2 * 3_600_000).toISOString()
+/** A weekly window that renews in six days and some hours: inside the week, past a day. */
+const thisWeek = () => new Date(Date.now() + 6.9 * DAY).toISOString()
 
 describe("daily-expiry / freeSeat", () => {
   test("a zero-time soon entry is not a dated window", () => {
@@ -66,5 +68,33 @@ describe("daily-expiry / freeSeat", () => {
   test("a spent zero-time seat is not a free seat", () => {
     const { order } = orderFor([{ soon: ["0001-01-01T00:00:00Z"], used: 100, key: "spent" }, { key: "free" }])
     expect(order[0]).toBe(1)
+  })
+})
+
+describe("daily-expiry / weekly windows", () => {
+  test("a weekly renewal inside the week is tier 0 even past a day", () => {
+    // A subscription whose 5-hour window has not opened yet carries only the
+    // weekly renewal; it must lead the order, not queue behind lapsed points.
+    const { order } = orderFor([
+      { soon: [thisWeek()], key: "week" },
+      { soon: [far()], key: "points" },
+    ])
+    expect(order[0]).toBe(0)
+  })
+
+  test("the daily renewal still goes before the weekly one", () => {
+    const { order } = orderFor([
+      { soon: [thisWeek()], key: "week" },
+      { soon: [near()], key: "daily" },
+    ])
+    expect(order).toStrictEqual([1, 0])
+  })
+
+  test("a lapse beyond the week stays tier 2, behind every weekly seat", () => {
+    const { order } = orderFor([
+      { soon: [far()], key: "points" },
+      { soon: [thisWeek()], key: "week" },
+    ])
+    expect(order).toStrictEqual([1, 0])
   })
 })

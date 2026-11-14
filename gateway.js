@@ -3,11 +3,17 @@
  *
  * Four tiers, in this order:
  *
- * 0. Channels that still have today's allowance, soonest reset first.
+ * 0. Channels with an allowance that renews within the week, soonest reset
+ *    first. A subscription's windows renew while its allowance is still
+ *    unspent, so its shortest window leads the tier when it exists — and a
+ *    seat whose short window has not opened yet (a fresh week, or a
+ *    subscription whose 5-hour window only starts with the first request)
+ *    still carries a dated renewal inside the week, so it stays here rather
+ *    than falling back to tier 2 among points that simply lapse.
  * 1. A model served at no cost: no window of its own, so it never fills and
  *    never dates. It goes after today's allowance and before points are spent.
  * 2. Channels holding dated points, soonest lapse first. A grant that lapses
- *    within two days is therefore at the front of this tier, not excluded
+ *    within the week is therefore at the front of this tier, not excluded
  *    from it (the old two-day horizon did exactly that).
  * 3. Everything else: permanent balance, or a refusal resting it. Listed order.
  *
@@ -30,7 +36,11 @@
 const DAY = 86_400_000
 
 /** Defaults, all overridable with options on the group. */
-const DEFAULT_DAILY_HORIZON_DAYS = 1
+// A week, not a day: a subscription renews on 5-hour and weekly windows, and
+// the weekly one is the only date a seat has when its short window has not
+// opened yet. With a one-day horizon those seats looked dateless-and-distant
+// and were sorted among lapsed points instead of leading the order.
+const DEFAULT_DAILY_HORIZON_DAYS = 7
 const DEFAULT_SWITCH_DAYS = 5
 const DEFAULT_RESCUE_DAYS = 2
 const DEFAULT_RESCUE_LEAD_DAYS = 5
