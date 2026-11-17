@@ -38,6 +38,16 @@ const far = () => new Date(Date.now() + 10 * DAY).toISOString()
 const near = () => new Date(Date.now() + 2 * 3_600_000).toISOString()
 /** A weekly window that renews in six days and some hours: inside the week, past a day. */
 const thisWeek = () => new Date(Date.now() + 6.9 * DAY).toISOString()
+const inDays = (days: number) => new Date(Date.now() + days * DAY).toISOString()
+
+/** Run the strategy twice on one pool with a seat whose renewal drifts outward. */
+function drift(firstDays: number, secondDays: number, over: Partial<Seat> = {}) {
+  const pool = poolName()
+  const seats = (days: number) => [seat({ key: "s0", soon: [inDays(days)], ...over }), seat({ key: "free" })]
+  const first = dailyExpiry(pool, seats(firstDays), {})
+  const second = dailyExpiry(pool, seats(secondDays), {})
+  return { first, second }
+}
 
 describe("daily-expiry / freeSeat", () => {
   test("a zero-time soon entry is not a dated window", () => {
@@ -68,6 +78,53 @@ describe("daily-expiry / freeSeat", () => {
   test("a spent zero-time seat is not a free seat", () => {
     const { order } = orderFor([{ soon: ["0001-01-01T00:00:00Z"], used: 100, key: "spent" }, { key: "free" }])
     expect(order[0]).toBe(1)
+  })
+})
+
+describe("daily-expiry / tier 0 hysteresis", () => {
+  test("a seat admitted inside the daily horizon keeps tier 0 past it", () => {
+    // 6 days enters; 9 days is past the 7-day entry horizon but inside the
+    // 10-day exit horizon, so it must stay ahead of the free seat.
+    const { first, second } = drift(6, 9)
+    expect(first).toStrictEqual([0, 1])
+    expect(second).toStrictEqual([0, 1])
+  })
+
+  test("a seat drops out of tier 0 once its renewal passes the exit horizon", () => {
+    const { second } = drift(6, 11)
+    // 11 days > 10-day exit horizon: back to tier 2, free seat leads.
+    expect(second).toStrictEqual([1, 0])
+  })
+
+  test("a seat never admitted does not skip the entry horizon", () => {
+    // First seen at 8 days: past the 7-day entry horizon, so no hysteresis and
+    // no membership. It is tier 2 even though 8 is inside the exit horizon.
+    const { first } = drift(8, 8)
+    expect(first).toStrictEqual([1, 0])
+  })
+
+  test("a spent seat is never admitted even when its window is close", () => {
+    const { first } = drift(6, 6, { used: 100 })
+    expect(first).toStrictEqual([1, 0])
+  })
+
+  test("tier0ExitDays overrides the exit horizon", () => {
+    const pool = poolName()
+    const seats = (days: number) => [seat({ key: "s0", soon: [inDays(days)] }), seat({ key: "free" })]
+    dailyExpiry(pool, seats(6), {})
+    // With the exit horizon set to 8 days, a 9-day renewal must now drop out.
+    const order = dailyExpiry(pool, seats(9), { tier0ExitDays: 8 })
+    expect(order).toStrictEqual([1, 0])
+  })
+
+  test("hysteresis is isolated per pool", () => {
+    const admitted = poolName()
+    const fresh = poolName()
+    const seats = (days: number) => [seat({ key: "s0", soon: [inDays(days)] }), seat({ key: "free" })]
+    dailyExpiry(admitted, seats(6), {})
+    // A different pool has no memory of s0, so 9 days is still past entry.
+    expect(dailyExpiry(fresh, seats(9), {})).toStrictEqual([1, 0])
+    expect(dailyExpiry(admitted, seats(9), {})).toStrictEqual([0, 1])
   })
 })
 

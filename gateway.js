@@ -17,13 +17,21 @@
  *    from it (the old two-day horizon did exactly that).
  * 3. Everything else: permanent balance, or a refusal resting it. Listed order.
  *
- * Tier 2 is the only tier that holds a frozen order. Its lapse dates move by
+ * Tier 0 has a hysteresis on membership. A seat enters when its renewal is
+ * inside the daily horizon (seven days by default), but once admitted it keeps
+ * its place until the renewal drifts past a wider exit horizon (ten days).
+ * That stops a seat whose earliest grant advances a day at a time from leaving
+ * tier 0 and jumping back in on the next request. Membership is per pool and
+ * in memory only, like the tier-2 freeze; it is cleared on restart, so a fresh
+ * process starts with the plain daily horizon for everyone.
+ *
+ * Tier 2 is the tier that holds a frozen order. Its lapse dates move by
  * whole grants as points are spent, so two channels a day apart used to swap
  * places after every few requests. A frozen tier-2 order is reused until the
  * anchor channel has spent five days' worth of grants (its earliest lapse
- * moved five days), or a grant close to expiring needs rescuing. Tiers 0, 1
- * and 3 are recomputed every call, so daily allowances and free models still
- * take effect immediately.
+ * moved five days), or a grant close to expiring needs rescuing. The base
+ * tier order is otherwise recomputed every call, so free models still take
+ * effect immediately.
  *
  * The module's runtime is kept by the host, so the frozen orders survive
  * across calls; they are deliberately in memory only and fail open to the
@@ -41,12 +49,20 @@ const DAY = 86_400_000
 // opened yet. With a one-day horizon those seats looked dateless-and-distant
 // and were sorted among lapsed points instead of leading the order.
 const DEFAULT_DAILY_HORIZON_DAYS = 7
+// A seat already in tier 0 keeps its place until its renewal drifts past this
+// horizon. Grants burn package by package, and the earliest lapse advances a
+// day at a time; without a wider exit horizon the seat would drop into tier 2
+// and jump back in on the next package, flipping the order every few calls.
+const DEFAULT_TIER0_EXIT_DAYS = 10
 const DEFAULT_SWITCH_DAYS = 5
 const DEFAULT_RESCUE_DAYS = 2
 const DEFAULT_RESCUE_LEAD_DAYS = 5
 
 /** pool -> { keys, anchor, anchorExpiry }, for the tier-2 segment only. */
 const frozen = new Map()
+
+/** pool -> Set of seat keys currently admitted to tier 0, for the exit hysteresis. */
+const tier0 = new Map()
 
 function optionDays(options, name, fallback) {
   const n = Number(options && options[name])
@@ -96,12 +112,16 @@ function keyOf(seat, i) {
   return typeof key === "string" && key.length > 0 ? key : `#${i}`
 }
 
-function marksOf(seats, now, horizon) {
-  return seats.map((seat) => {
-    const daily = dailyResetOf(seat, now, horizon)
-    const expiry = expiryOf(seat, now, horizon)
+function marksOf(seats, now, horizon, exitHorizon, admitted) {
+  return seats.map((seat, i) => {
+    const key = keyOf(seat, i)
+    // A seat already in tier 0 keeps the wider window; a newcomer must fit the
+    // normal one. A spent seat is never admitted regardless of membership.
+    const window = admitted && admitted.has(key) && !spentOf(seat) ? exitHorizon : horizon
+    const daily = dailyResetOf(seat, now, window)
+    const expiry = expiryOf(seat, now, window)
     const tier = daily > 0 && !spentOf(seat) ? 0 : freeSeat(seat) ? 1 : expiry < Infinity ? 2 : 3
-    return { daily, expiry, tier }
+    return { key, daily, expiry, tier }
   })
 }
 
@@ -226,17 +246,30 @@ function withFrozen(pool, seats, marks, order, cfg, now) {
 export const strategies = {
   "daily-expiry": (pool, seats, options) => {
     const now = Date.now()
+    const poolId = String(pool ?? "")
     const cfg = {
       horizon: optionDays(options, "dailyHorizonDays", DEFAULT_DAILY_HORIZON_DAYS) * DAY,
+      exitHorizon: optionDays(options, "tier0ExitDays", DEFAULT_TIER0_EXIT_DAYS) * DAY,
       switchDays: optionDays(options, "switchDays", DEFAULT_SWITCH_DAYS),
       rescueDays: optionDays(options, "rescueDays", DEFAULT_RESCUE_DAYS),
       rescueLeadDays: optionDays(options, "rescueLeadDays", DEFAULT_RESCUE_LEAD_DAYS),
     }
     const listed = seats.map((_, i) => i)
     try {
-      const marks = marksOf(seats, now, cfg.horizon)
+      const admitted = tier0.get(poolId)
+      const marks = marksOf(seats, now, cfg.horizon, cfg.exitHorizon, admitted)
       const base = baseOrderOf(seats, marks)
-      const order = withFrozen(String(pool ?? ""), seats, marks, base, cfg, now)
+      const order = withFrozen(poolId, seats, marks, base, cfg, now)
+      // Rebuild membership from the freshly computed tier-0 seats: a seat that
+      // drifted past the exit window drops out and loses its wider window next
+      // call. Cap the map so a long-lived process does not accumulate pools.
+      const nowTier0 = new Set(marks.filter((m) => m.tier === 0).map((m) => m.key))
+      if (nowTier0.size > 0) {
+        tier0.set(poolId, nowTier0)
+        if (tier0.size > 32) tier0.clear()
+      } else {
+        tier0.delete(poolId)
+      }
       return validOrder(order, seats) ? order : listed
     } catch {
       return listed
