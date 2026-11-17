@@ -6,6 +6,10 @@
 
 ### Added
 
+- `daily-expiry` 新增 `paidSeatKeys` 选项：按座位 key 列出会花积分的渠道，让它们从 tier 1 落到 tier 3
+  兜底层。Magpie 传给策略的座位没有 `balance` 或 `free` 字段，一个「已知、未用、无续期日期」的积分座位
+  和真正免费的模型在策略眼里完全相同；此前这类渠道会被排到所有日期额度之前，提前花掉积分。
+  匹配支持 `provider` 精确名与 `provider@account` 后缀。
 - `daily-expiry` 给 tier 0 加了成员滞后：座位进入 tier 0 仍按 `dailyHorizonDays`（默认 7 天）判定，
   但一旦进入，要等续期漂到 `tier0ExitDays`（默认 10 天）之外才移出。积分包按包烧、最早到期日逐天推进时，
   座位不会刚掉出 tier 0 又在下一次请求挤回来。成员状态按 pool 存在内存里，网关重启后清空，

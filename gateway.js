@@ -103,8 +103,29 @@ function spentOf(seat) {
 }
 
 /** Use the parsed list: a zero or invalid time is not a dated window. */
-function freeSeat(seat) {
-  return seat.known === true && Number(seat.used) === 0 && soonOf(seat).length === 0
+function freeSeat(seat, paidKeys) {
+  return (
+    seat.known === true &&
+    Number(seat.used) === 0 &&
+    soonOf(seat).length === 0 &&
+    !paidSeat(seat, paidKeys)
+  )
+}
+
+/** A paid balance can look exactly like a free seat: known, unused, no date.
+ *  The host's strategy seat does not carry `balance` or `free`, so a channel
+ *  that reports its points as an allowance is indistinguishable from a model
+ *  served at no cost. Callers that know which channels spend credits list
+ *  their seat keys in `paidSeatKeys`; those seats fall to tier 3 instead of
+ *  jumping ahead of dated points. Matching is exact by key, and tolerant of
+ *  the `provider@account` suffix magpie adds to a second account. */
+function paidSeat(seat, keys) {
+  if (!keys || keys.length === 0) return false
+  const key = String(seat.key ?? "")
+  return keys.some((wanted) => {
+    const w = String(wanted ?? "")
+    return w.length > 0 && (key === w || key.startsWith(`${w}@`))
+  })
 }
 
 function keyOf(seat, i) {
@@ -112,7 +133,7 @@ function keyOf(seat, i) {
   return typeof key === "string" && key.length > 0 ? key : `#${i}`
 }
 
-function marksOf(seats, now, horizon, exitHorizon, admitted) {
+function marksOf(seats, now, horizon, exitHorizon, admitted, paidKeys) {
   return seats.map((seat, i) => {
     const key = keyOf(seat, i)
     // A seat already in tier 0 keeps the wider window; a newcomer must fit the
@@ -120,7 +141,7 @@ function marksOf(seats, now, horizon, exitHorizon, admitted) {
     const window = admitted && admitted.has(key) && !spentOf(seat) ? exitHorizon : horizon
     const daily = dailyResetOf(seat, now, window)
     const expiry = expiryOf(seat, now, window)
-    const tier = daily > 0 && !spentOf(seat) ? 0 : freeSeat(seat) ? 1 : expiry < Infinity ? 2 : 3
+    const tier = daily > 0 && !spentOf(seat) ? 0 : freeSeat(seat, paidKeys) ? 1 : expiry < Infinity ? 2 : 3
     return { key, daily, expiry, tier }
   })
 }
@@ -257,7 +278,10 @@ export const strategies = {
     const listed = seats.map((_, i) => i)
     try {
       const admitted = tier0.get(poolId)
-      const marks = marksOf(seats, now, cfg.horizon, cfg.exitHorizon, admitted)
+      const paidKeys = Array.isArray(options && options.paidSeatKeys)
+        ? options.paidSeatKeys
+        : []
+      const marks = marksOf(seats, now, cfg.horizon, cfg.exitHorizon, admitted, paidKeys)
       const base = baseOrderOf(seats, marks)
       const order = withFrozen(poolId, seats, marks, base, cfg, now)
       // Rebuild membership from the freshly computed tier-0 seats: a seat that

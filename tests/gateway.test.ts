@@ -24,9 +24,9 @@ function missing(): never {
 
 const dailyExpiry: Strategy = strategies["daily-expiry"] ?? missing()
 
-function orderFor(specs: Array<Partial<Seat>>) {
+function orderFor(specs: Array<Partial<Seat>>, options: Record<string, unknown> = {}) {
   const seats = specs.map((s, i) => seat({ key: `s${i}`, ...s }))
-  return { seats, order: dailyExpiry(poolName(), seats, {}) }
+  return { seats, order: dailyExpiry(poolName(), seats, options) }
 }
 
 function poolName(): string {
@@ -153,5 +153,40 @@ describe("daily-expiry / weekly windows", () => {
       { soon: [thisWeek()], key: "week" },
     ])
     expect(order).toStrictEqual([1, 0])
+  })
+})
+
+describe("daily-expiry / paidSeatKeys", () => {
+  // A balance-funded channel and a free model have the same strategy fields:
+  // known, used 0, no date. Without an explicit list the two are indistinguishable.
+  const opts = (keys: string[]) => ({ paidSeatKeys: keys })
+
+  test("a listed paid channel falls behind a free one", () => {
+    const { order } = orderFor(
+      [{ key: "paid-points", soon: ["0001-01-01T00:00:00Z"] }, { key: "genuinely-free" }],
+      opts(["paid-points"]),
+    )
+    expect(order).toStrictEqual([1, 0])
+  })
+
+  test("an account suffix still matches its provider key", () => {
+    const { order } = orderFor([{ key: "points@alice" }, { key: "free" }], opts(["points"]))
+    expect(order).toStrictEqual([1, 0])
+  })
+
+  test("an unlisted channel keeps its free-tier position", () => {
+    const { order } = orderFor([{ key: "free" }, { key: "later" }], opts(["unrelated"]))
+    expect(order).toStrictEqual([0, 1])
+  })
+
+  test("an absent or empty list leaves behaviour unchanged", () => {
+    const bare = orderFor([{ key: "free" }, { key: "later" }]).order
+    const empty = orderFor([{ key: "free" }, { key: "later" }], { paidSeatKeys: [] }).order
+    expect(empty).toStrictEqual(bare)
+  })
+
+  test("a dated paid channel still keeps its date tier", () => {
+    const { order } = orderFor([{ key: "paid", soon: [near()] }, { key: "free" }], opts(["paid"]))
+    expect(order[0]).toBe(0)
   })
 })
