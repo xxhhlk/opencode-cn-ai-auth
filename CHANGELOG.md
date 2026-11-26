@@ -45,6 +45,12 @@
 - 领奖只挂在 `auth.checkin`（`Check in now` / 每日自动签到 / `magpie accounts
   checkin`），**不**在 `usage` 里读到就领：未达档位是常态，每次额度刷新都发一个
   注定被拒的请求只是白烧上游（新手任务能那样做，是因为服务端不校验前置行为）。
+- **Loomy 渠道含图请求补视觉用途声明**。上游按 `X-Loomy-Request-Purpose` 分流，
+  不含 `kb.vision` 的含图请求会被把图片替换成「视觉分析跳过」文本标注，模型
+  读不到图（2026-11-27 直连 loomyad 实证：补上该头后 `prompt_tokens` 从 74 升到
+  147、图片正常解析，`points_consumed` 口径不变）。`withVisionPurpose` 包装
+  vendor 的出站 fetch，仅对含图片 part 的请求体盖该头，纯文本请求原样放行，
+  body 不重写。
 
 ## [0.9.9] - 2026-10-22
 

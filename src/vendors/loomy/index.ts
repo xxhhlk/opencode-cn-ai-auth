@@ -31,6 +31,7 @@ import { LOOMY_API_BASE, LOOMY_ICON, LOOMY_ID, LOOMY_NAME, LOOMY_SIGNED_OUT_CODE
 import { accountLabel, rememberedQuota, rememberQuota, requireSession, sessionOf } from "./session.ts"
 import { claimTasksEnabled, forgetTaskReading, taskStateFor, tasksWindow } from "./tasks.ts"
 import { checkinResult, quotaForNow, usageReport } from "./usage.ts"
+import { withVisionPurpose } from "./vision-purpose.ts"
 
 /** Where this vendor's models are reached; see `core/plugin.ts`. */
 const contextOf = (context: VendorContext) => modelContextOf(context, LOOMY_API_BASE)
@@ -67,7 +68,9 @@ export const LoomyAuthPlugin = defineVendor(({ client, options }) => {
         // 两层各司其职：门禁（锁定永久积分）先拦；200+100002 的认证失败重建为
         // 401 交给宿主标记账号（`rewriteAuthFailure`）——否则聊天链路的登录态
         // 失效只会表现为一条「响应不是 OpenAI 应答」的形状错误。
-        fetch: gatedFetch(rewriteAuthFailure(fetch), () => lockedRefusal(auth, options)),
+        // 再包一层视觉用途声明：上游按 `X-Loomy-Request-Purpose` 分流，含图的
+        // 请求必须声明 `kb.vision` 才会真正解析图片（见 vision-purpose.ts）。
+        fetch: gatedFetch(withVisionPurpose(rewriteAuthFailure(fetch)), () => lockedRefusal(auth, options)),
       }
     },
 
