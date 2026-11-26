@@ -52,6 +52,14 @@
   vendor 的出站 fetch，仅对含图片 part 的请求体盖该头，纯文本请求原样放行，
   body 不重写。
 
+### Changed
+
+- **Loomy 渠道模型不再声明图片能力**。上游视觉通道在长上下文（约 6–7.5k
+  token 以上）会跳过图片（2026-11-27 实测：同一张图在 5749 token 内正常识别、
+  7815 token 起被标记「视觉分析跳过」），继续按 `input_modalities` 声明 image
+  会误导宿主按视觉渠道投放。`parseModel` 现在对所有 loomy 模型统一按纯文本
+  上报，移除 `LOOMY_IMAGE_CAPABILITY_OVERRIDES` 与 `supportsImageOf`。
+
 ## [0.9.9] - 2026-10-22
 
 ### Fixed

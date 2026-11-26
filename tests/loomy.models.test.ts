@@ -58,7 +58,7 @@ describe("parseModel", () => {
       rate: 4,
       context: 1_048_576,
       output: 65_536,
-      images: true,
+      images: false,
       reasoning: true,
       efforts: ["low", "high"],
     })

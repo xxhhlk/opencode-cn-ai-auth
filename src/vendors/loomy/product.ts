@@ -186,26 +186,7 @@ export const LOOMY_CONTEXT_WINDOW_OVERRIDES: Readonly<Record<string, number>> = 
 })
 
 /**
- * 远端声明为**纯文本**、但实测**能读图**的模型（`input_modalities` 漏报）。
- *
- * ## 为什么需要（真实缺陷，JetHub 2026-10-14 用户报障）
- *
- * 远端对 `qwen-3.8-max` 下发 `capabilities.input_modalities = ['text']`，
- * 原样直译 ⇒ 图片根本发不出去（宿主按声明做附件准入）。实测判据是随机纯色
- * PNG 的颜色问答（纯文本模型答不出颜色）：`qwen-3.8-max` 4/5 次答对，同批
- * `DeepSeek-V4.1-Flash` / `Kimi-k2.6` / `qwen3.8-flash` / `mimo-v2.5` 均读得
- * 到（远端本来就声明了 image，不需要覆盖）。
- *
- * ⚠️ `MiniMax-M3` 远端声明 image 但实测 4/4 未命中（疑似编造答案）——
- * **刻意不降级**：单账号证据不足以判死一个已声明的能力，降级会改变既有可用路径。
- * ⚠️ **不要改成「该家恒支持图片」**：白名单只覆盖实测确认的个案，否则将来上架
- * 真正的纯文本模型时会把图放行，让上游回一个更难懂的 400。
- * ⚠️ 表内条目必须**小写**（查表经 `catalogKey` 归一）。
- */
-export const LOOMY_IMAGE_CAPABILITY_OVERRIDES: ReadonlySet<string> = Object.freeze(new Set(["qwen-3.8-max"]))
-
-/**
- * 模型 id 的**归一化查表键**：上面两张覆盖表唯一的查表口径
+ * 模型 id 的**归一化查表键**：覆盖表唯一的查表口径
  * （小写、去首尾空白）。⚠️ 只用于查表，绝不改对外 id。
  */
 export function catalogKey(modelId: string): string {
@@ -218,14 +199,6 @@ export function catalogKey(modelId: string): string {
  */
 export function contextWindowOf(modelId: string, declared: number): number {
   return LOOMY_CONTEXT_WINDOW_OVERRIDES[catalogKey(modelId)] ?? declared
-}
-
-/**
- * 取一个模型的**真实**图片能力：覆盖表命中即为 true，否则原样返回声明值。
- * ⚠️ 远端与兜底表**两条路径都必须过这里**。
- */
-export function supportsImageOf(modelId: string, declared: boolean): boolean {
-  return LOOMY_IMAGE_CAPABILITY_OVERRIDES.has(catalogKey(modelId)) || declared
 }
 
 /**

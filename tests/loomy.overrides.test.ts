@@ -4,8 +4,9 @@
  * 1. **spark-x 上下文覆盖**（IKJW31）：远端虚报 1M、真实墙 262144 ——
  *    兜底表与远端解析**两条路径**都必须过覆盖表（只改兜底表无效），
  *    查表大小写/空白不敏感（上游改大小写即静默失效的教训）。
- * 2. **qwen-3.8-max 图片能力覆盖**（2026-10-14 报障）：远端漏报
- *    input_modalities、实测能读图 —— 同样两条路径都过覆盖表。
+ * 2. **loomy 渠道不再声明图片能力**（2026-11-27）：上游视觉通道在长上下文
+ *    （约 6–7.5k token 以上）会跳过图片，能力标记统一按纯文本上报，避免宿主
+ *    按视觉渠道投放 loomy 模型。
  * 3. **200 + 业务码 100002 重建为 401**（JetHub E-1）：聊天链路的登录态失效
  *    恒 HTTP 200，宿主只认状态码 —— 不重建账号永远不会被标记过期。
  */
@@ -13,7 +14,7 @@
 import { describe, expect, test } from "bun:test"
 import { rewriteAuthFailure } from "../src/vendors/loomy/api.ts"
 import { fallbackModels, parseModel } from "../src/vendors/loomy/models.ts"
-import { contextWindowOf, LOOMY_FALLBACK_MODELS, supportsImageOf } from "../src/vendors/loomy/product.ts"
+import { contextWindowOf, LOOMY_FALLBACK_MODELS } from "../src/vendors/loomy/product.ts"
 import { at, cannedFetch, jsonOk, textBody } from "./helpers.ts"
 
 describe("覆盖表（product.ts）", () => {
@@ -26,13 +27,6 @@ describe("覆盖表（product.ts）", () => {
   test("查表大小写/空白不敏感（上游改大小写不得静默失效）", () => {
     expect(contextWindowOf("Spark-X", 1_048_576)).toBe(262_144)
     expect(contextWindowOf("  SPARK-X  ", 1_048_576)).toBe(262_144)
-    expect(supportsImageOf("Qwen-3.8-Max", false)).toBe(true)
-  })
-
-  test("qwen-3.8-max 声明纯文本但实测读图；MiniMax-M3 的假声明刻意不降级", () => {
-    expect(supportsImageOf("qwen-3.8-max", false)).toBe(true)
-    expect(supportsImageOf("MiniMax-M3", true)).toBe(true)
-    expect(supportsImageOf("deepseek-v4-flash-0731", false)).toBe(false)
   })
 
   test("兜底表的 spark-x 已是 262144（两条真相源不得分叉）", () => {
@@ -54,15 +48,15 @@ describe("parseModel 的远端路径", () => {
     expect(at([spec] as const, 0)?.images).toBe(false)
   })
 
-  test("qwen-3.8-max 远端漏报 input_modalities 仍判为支持图片", () => {
+  test("loomy 渠道模型统一不声明图片能力（视觉通道长上下文会跳过图片）", () => {
     const spec = parseModel({
       id: "qwen-3.8-max",
       type: "chat",
       name: "Qwen 3.8 Max (x12.0)",
       context_length: 1_000_000,
-      capabilities: { input_modalities: ["text"] },
+      capabilities: { input_modalities: ["text", "image"] },
     })
-    expect(at([spec] as const, 0)?.images).toBe(true)
+    expect(at([spec] as const, 0)?.images).toBe(false)
     expect(at([spec] as const, 0)?.context).toBe(1_000_000)
   })
 
